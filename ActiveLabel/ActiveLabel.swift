@@ -9,6 +9,8 @@
 import Foundation
 import UIKit
 
+public typealias EventHyperlink = (code:String, event_doc_id:String)
+
 public protocol ActiveLabelDelegate: class {
     func didSelectText(text: String, type: ActiveType)
 }
@@ -16,6 +18,9 @@ public protocol ActiveLabelDelegate: class {
 @IBDesignable public class ActiveLabel: UILabel {
     
     // MARK: - public properties
+    var username: String = ""
+    var usernameAsTitle: Bool = false
+    var eventArray: [EventHyperlink] = []
     public weak var delegate: ActiveLabelDelegate?
     
     @IBInspectable public var mentionEnabled: Bool = true {
@@ -29,6 +34,16 @@ public protocol ActiveLabelDelegate: class {
         }
     }
     @IBInspectable public var URLEnabled: Bool = true {
+        didSet {
+            updateTextStorage()
+        }
+    }
+    @IBInspectable public var usernameEnabled: Bool = false {
+        didSet {
+            updateTextStorage()
+        }
+    }
+    @IBInspectable public var eventCodeEnabled: Bool = false {
         didSet {
             updateTextStorage()
         }
@@ -69,6 +84,28 @@ public protocol ActiveLabelDelegate: class {
         }
     }
     
+    //new methods
+    @IBInspectable public var usernameColor: UIColor = .blueColor() {
+        didSet {
+            updateTextStorage()
+        }
+    }
+    @IBInspectable public var usernameSelectedColor: UIColor? {
+        didSet {
+            updateTextStorage()
+        }
+    }
+    @IBInspectable public var eventCodeColor: UIColor = .purpleColor() {
+        didSet {
+            updateTextStorage()
+        }
+    }
+    @IBInspectable public var eventCodeSelectedColor: UIColor? {
+        didSet {
+            updateTextStorage()
+        }
+    }
+    
     // MARK: - public methods
     public func handleMentionTap(handler: (String) -> ()) {
         mentionTapHandler = handler
@@ -80,6 +117,14 @@ public protocol ActiveLabelDelegate: class {
     
     public func handleURLTap(handler: (NSURL) -> ()) {
         urlTapHandler = handler
+    }
+    
+    public func handleUsernameTap(handler: (String) -> ()) {
+        usernameTapHandler = handler
+    }
+    
+    public func handleEventCodeTap(handler: (EventHyperlink) -> ()) {
+        eventCodeHandler = handler
     }
     
     // MARK: - override UILabel properties
@@ -171,6 +216,9 @@ public protocol ActiveLabelDelegate: class {
             case .Mention(let userHandle): didTapMention(userHandle)
             case .Hashtag(let hashtag): didTapHashtag(hashtag)
             case .URL(let url): didTapStringURL(url)
+            case .Username(self.username): didTapUsername(self.username)
+            case .Username(_): ()
+            case .EventCode(let eventHyperlink): didTapEventCode(eventHyperlink)
             case .None: ()
             }
             
@@ -190,6 +238,8 @@ public protocol ActiveLabelDelegate: class {
     private var mentionTapHandler: ((String) -> ())?
     private var hashtagTapHandler: ((String) -> ())?
     private var urlTapHandler: ((NSURL) -> ())?
+    private var usernameTapHandler: ((String) -> ())?
+    private var eventCodeHandler: ((EventHyperlink) -> ())?
     
     private var selectedElement: (range: NSRange, element: ActiveElement)?
     private var heightCorrection: CGFloat = 0
@@ -200,6 +250,8 @@ public protocol ActiveLabelDelegate: class {
         .Mention: [],
         .Hashtag: [],
         .URL: [],
+        .Username: [],
+        .EventCode: [],
     ]
     
     // MARK: - helper functions
@@ -211,7 +263,19 @@ public protocol ActiveLabelDelegate: class {
     }
     
     private func updateTextStorage() {
-        guard let attributedText = attributedText else {
+        
+        //username
+        guard let premodifiedText = attributedText?.string else {
+            return
+        }
+        let modifiedAttributedText: NSAttributedString?
+        if usernameEnabled {
+            modifiedAttributedText = NSAttributedString(string:username + (usernameAsTitle ? "\n" : " ") + premodifiedText)
+        } else {
+            modifiedAttributedText = attributedText
+        }
+        
+        guard let attributedText = modifiedAttributedText else {
             return
         }
         
@@ -223,6 +287,7 @@ public protocol ActiveLabelDelegate: class {
         guard attributedText.length > 0 else {
             return
         }
+        
         
         let mutAttrString = addLineBreak(attributedText)
         parseTextAndExtractActiveElements(mutAttrString)
@@ -252,16 +317,28 @@ public protocol ActiveLabelDelegate: class {
         attributes[NSForegroundColorAttributeName] = mentionColor
         
         for (type, elements) in activeElements {
-            
+            var removeMark: Bool = false
             switch type {
             case .Mention: attributes[NSForegroundColorAttributeName] = mentionColor
             case .Hashtag: attributes[NSForegroundColorAttributeName] = hashtagColor
             case .URL: attributes[NSForegroundColorAttributeName] = URLColor
+            case .Username: attributes[NSForegroundColorAttributeName] = usernameColor
+            case .EventCode:
+                attributes[NSForegroundColorAttributeName] = eventCodeColor
+                removeMark = true
             case .None: ()
             }
             
             for element in elements {
-                mutAttrString.setAttributes(attributes, range: element.range)
+                if removeMark {
+                    var markAttributes:[String: AnyObject] = [:]
+                    markAttributes[NSFontAttributeName] = UIFont(name: "Helvetica", size: 0)
+                    markAttributes[NSForegroundColorAttributeName] = UIColor.clearColor()
+                    mutAttrString.setAttributes(attributes, range: NSMakeRange(element.range.location+1, element.range.length))
+                    mutAttrString.setAttributes(markAttributes, range: NSMakeRange(element.range.location, 1))
+                } else {
+                    mutAttrString.setAttributes(attributes, range: element.range)
+                }
             }
         }
     }
@@ -272,10 +349,20 @@ public protocol ActiveLabelDelegate: class {
         let textLength = textString.length
         var searchRange = NSMakeRange(0, textLength)
         
-        for word in textString.componentsSeparatedByCharactersInSet(NSCharacterSet.whitespaceAndNewlineCharacterSet()) {
-            let element = activeElement(word)
+        let words = textString.componentsSeparatedByCharactersInSet(NSCharacterSet.whitespaceAndNewlineCharacterSet())
+        var eventIndex: Int = 0
+        for (index,word) in words.enumerate() {
+            let element:ActiveElement
+            
+            if(index == 0 && word == self.username) {
+                //username tag
+                element = ActiveElement.Username(self.username)
+            } else {
+                //other tag
+                element = activeElement(word)
+            }
     
-            if case .None = element {
+            if case .None = element  {
                 continue
             }
             
@@ -292,6 +379,14 @@ public protocol ActiveLabelDelegate: class {
                 activeElements[.Hashtag]?.append((elementRange, element))
             case .URL where URLEnabled:
                 activeElements[.URL]?.append((elementRange, element))
+            case .Username where usernameEnabled:
+                activeElements[.Username]?.append((elementRange, element))
+            case .EventCode(let eventHyperlink) where eventCodeEnabled && eventArray.count > eventIndex:
+                let hyperlink = eventArray[eventIndex]
+                if hyperlink.code == eventHyperlink.code {
+                    activeElements[.EventCode]?.append((NSMakeRange(elementRange.location, elementRange.length-1), ActiveElement.EventCode(code: hyperlink.code,event_doc_id: hyperlink.event_doc_id)))
+                    eventIndex++
+                }
             default: ()
             }
         }
@@ -323,11 +418,16 @@ public protocol ActiveLabelDelegate: class {
         }
         
         var attributes = textStorage.attributesAtIndex(0, effectiveRange: nil)
+        var removeMark: Bool = false
         if isSelected {
             switch selectedElement.element {
             case .Mention(_): attributes[NSForegroundColorAttributeName] = mentionColor
             case .Hashtag(_): attributes[NSForegroundColorAttributeName] = hashtagColor
             case .URL(_): attributes[NSForegroundColorAttributeName] = URLColor
+            case .Username(_): attributes[NSForegroundColorAttributeName] = usernameColor
+            case .EventCode(_):
+                attributes[NSForegroundColorAttributeName] = eventCodeColor
+                removeMark = true
             case .None: ()
             }
         } else {
@@ -335,12 +435,24 @@ public protocol ActiveLabelDelegate: class {
             case .Mention(_): attributes[NSForegroundColorAttributeName] = mentionSelectedColor ?? mentionColor
             case .Hashtag(_): attributes[NSForegroundColorAttributeName] = hashtagSelectedColor ?? hashtagColor
             case .URL(_): attributes[NSForegroundColorAttributeName] = URLSelectedColor ?? URLColor
+            case .Username(_): attributes[NSForegroundColorAttributeName] = usernameSelectedColor ?? usernameColor
+            case .EventCode(_):
+                attributes[NSForegroundColorAttributeName] = eventCodeColor ?? eventCodeSelectedColor
+                removeMark = true
             case .None: ()
             }
         }
         
-        textStorage.addAttributes(attributes, range: selectedElement.range)
-        
+        if removeMark {
+            var markAttributes:[String: AnyObject] = [:]
+            markAttributes[NSFontAttributeName] = UIFont(name: "Helvetica", size: 0)
+            markAttributes[NSForegroundColorAttributeName] = UIColor.clearColor()
+            textStorage.addAttributes(attributes, range: NSMakeRange(selectedElement.range.location+1, selectedElement.range.length))
+            textStorage.addAttributes(markAttributes, range: NSMakeRange(selectedElement.range.location, 1))
+        } else {
+            textStorage.addAttributes(attributes, range: selectedElement.range)
+            
+        }
         setNeedsDisplay()
     }
     
@@ -410,6 +522,22 @@ public protocol ActiveLabelDelegate: class {
             return
         }
         urlHandler(url)
+    }
+    
+    private func didTapUsername(username: String) {
+        guard let usernameHandler = usernameTapHandler else {
+            delegate?.didSelectText(username, type: .Username)
+            return
+        }
+        usernameHandler(username)
+    }
+    
+    private func didTapEventCode(eventHyperlink: EventHyperlink) {
+        guard let eventCodeHandler = eventCodeHandler else {
+            delegate?.didSelectText(eventHyperlink.event_doc_id, type: .EventCode)
+            return
+        }
+        eventCodeHandler(eventHyperlink)
     }
 }
 

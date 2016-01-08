@@ -12,6 +12,8 @@ enum ActiveElement {
     case Mention(String)
     case Hashtag(String)
     case URL(String)
+    case Username(String)
+    case EventCode(code:String, event_doc_id:String)
     case None
 }
 
@@ -19,6 +21,8 @@ public enum ActiveType {
     case Mention
     case Hashtag
     case URL
+    case Username
+    case EventCode
     case None
 }
 
@@ -40,6 +44,8 @@ func activeElement(word: String) -> ActiveElement {
         return .Mention(allowedWord)
     } else if word.hasPrefix("#") {
         return .Hashtag(allowedWord)
+    } else if let _ = Int(allowedWord) where word.hasPrefix("£") && word.characters.count == 4 {
+        return .EventCode(code:allowedWord, event_doc_id:"")
     } else {
         return .None
     }
